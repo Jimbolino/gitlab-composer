@@ -6,6 +6,7 @@ use Gitlab\Client;
 use Gitlab\Exception\RuntimeException;
 
 $packages_file = __DIR__ . '/../cache/packages.json';
+$static_file = __DIR__ . '/../confs/static-repos.json';
 
 /**
  * Output a json file, sending max-age header, then dies
@@ -38,6 +39,13 @@ $client->authenticate($confs['api_key'], Client::AUTH_URL_TOKEN);
 
 $projects = $client->api('projects');
 $repos = $client->api('repositories');
+
+$validMethods = array('ssh', 'http');
+if (isset($confs['method']) && in_array($confs['method'], $validMethods)) {
+    define('method', $confs['method']);
+} else {
+    define('method', 'ssh');
+}
 
 /**
  * Retrieves some information about a project's composer.json
@@ -79,7 +87,7 @@ $fetch_ref = function($project, $ref) use ($fetch_composer) {
     if (($data = $fetch_composer($project, $ref['commit']['id'])) !== false) {
         $data['version'] = $version;
         $data['source'] = array(
-            'url'       => $project['ssh_url_to_repo'],
+            'url'       => $project[method . '_url_to_repo'],
             'type'      => 'git',
             'reference' => $ref['commit']['id'],
         );
@@ -98,16 +106,18 @@ $fetch_ref = function($project, $ref) use ($fetch_composer) {
 $fetch_refs = function($project) use ($fetch_ref, $repos) {
     $datas = array();
 
-    foreach (array_merge($repos->branches($project['id']), $repos->tags($project['id'])) as $ref) {
-        foreach ($fetch_ref($project, $ref) as $version => $data) {
-			/*
-			 * duplicate branches that look like version numbers, so we can use both "dev-2.0 and 2.0"
-			 */
-			if(substr($version,0,4) !== 'dev-' ){
-				$datas['dev-'.$version] = $data;
-				$datas['dev-'.$version]['version'] = 'dev-'.$version;
-			}
-            $datas[$version] = $data;
+    try {
+        foreach (array_merge($repos->branches($project['id']), $repos->tags($project['id'])) as $ref) {
+            foreach ($fetch_ref($project, $ref) as $version => $data) {
+                // duplicate branches that look like version numbers, so we can use both "dev-2.0 and 2.0"
+                if(substr($version,0,4) !== 'dev-' ){
+                    $datas['dev-'.$version] = $data;
+                    $datas['dev-'.$version]['version'] = 'dev-'.$version;
+                }
+                $datas[$version] = $data;
+            }
+        } catch (RuntimeException $e) {
+        // The repo has no commits — skipping it.
         }
     }
 
@@ -171,6 +181,26 @@ if (!file_exists($packages_file) || filemtime($packages_file) < $mtime) {
     foreach ($all_projects as $project) {
         if ($package = $load_data($project)) {
             $packages[$project['path_with_namespace']] = $package;
+        }
+    }
+    if ( file_exists( $static_file ) ) {
+        $static_packages = json_decode( file_get_contents( $static_file ) );
+        foreach ( $static_packages as $name => $package ) {
+            foreach ( $package as $version => $root ) {
+                if ( isset( $root->extra ) ) {
+                    $source = '_source';
+                    while ( isset( $root->extra->{$source} ) ) {
+                        $source = '_' . $source;
+                    }
+                    $root->extra->{$source} = 'static';
+                }
+                else {
+                    $root->extra = array(
+                        '_source' => 'static',
+                    );
+                }
+            }
+            $packages[$name] = $package;
         }
     }
     $data = json_encode(array(
