@@ -116,9 +116,9 @@ $fetch_refs = function($project) use ($fetch_ref, $repos) {
                 }
                 $datas[$version] = $data;
             }
-        } catch (RuntimeException $e) {
-        // The repo has no commits — skipping it.
         }
+    } catch (RuntimeException $e) {
+        // The repo has no commits — skipping it.
     }
 
     return $datas;
